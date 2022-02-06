@@ -16,7 +16,7 @@ The Azure Artifacts Credential Provider automates the acquisition of credentials
 
 ### MSBuild on Windows
 
-Install [Visual Studio version 15.9-preview1 or later](https://visualstudio.microsoft.com/vs/preview/) to get the required version of msbuild (`15.8.166.59604` or later).
+Install [Visual Studio version 15.9-preview1 or later](https://visualstudio.microsoft.com/vs/preview/) to get the required version of MSBuild (`15.8.166.59604` or later). Alternatively, you can download MSBuild directly by downloading the [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/?q=build+tools). MSBuild is also installed as a part of the [.NET Core SDK](https://dotnet.microsoft.com/download).
 
 ### NuGet
 
@@ -55,7 +55,12 @@ Using the above is recommended, but as per [NuGet's plugin discovery rules](http
 #### Automatic bash script
 
 [Linux or Mac helper script](helpers/installcredprovider.sh)
-- e.g. `wget -qO- https://aka.ms/install-artifacts-credprovider.sh | bash`
+
+Examples:
+- `wget -qO- https://aka.ms/install-artifacts-credprovider.sh | bash`
+- `sh -c "$(curl -fsSL https://aka.ms/install-artifacts-credprovider.sh)"`
+
+> Note: this script only installs the netcore version of the plugin. If you need to have it working with mono msbuild, you will need to download the version with both netcore and netfx binaries following the steps in [Manual installation on Linux and Mac](#installation-on-linux-and-mac)
 
 #### Manual installation on Linux and Mac
 
@@ -289,6 +294,8 @@ the rights to use your contribution. For details, visit https://cla.microsoft.co
 When you submit a pull request, a CLA-bot will automatically determine whether you need to provide
 a CLA and decorate the PR appropriately (e.g., label, comment). Simply follow the instructions
 provided by the bot. You will only need to do this once across all repos using our CLA.
+
+When submitting a pull request, please include a description of the problem your PR is trying to solve, details about the changes, and how the change was tested.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
