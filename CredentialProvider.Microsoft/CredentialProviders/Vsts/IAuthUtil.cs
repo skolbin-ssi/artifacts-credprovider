@@ -3,6 +3,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -15,7 +16,7 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
 {
     public interface IAuthUtil
     {
-        Task<Uri> GetAadAuthorityUriAsync(Uri uri, CancellationToken cancellationToken);
+        Task<AuthorizationInfo> GetAuthorizationInfoAsync(Uri uri, CancellationToken cancellationToken);
 
         Task<AzDevDeploymentType> GetAzDevDeploymentType(Uri uri);
 
@@ -29,14 +30,19 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
         OnPrem
     }
 
+    public struct AuthorizationInfo
+    {
+        public Uri EntraAuthorityUri { get; set; }
+        public string EntraTenantId { get; set; }
+    };
+
     public class AuthUtil : IAuthUtil
     {
         public const string VssResourceTenant = "X-VSS-ResourceTenant";
         public const string VssAuthorizationEndpoint = "X-VSS-AuthorizationEndpoint";
-        private const string OrganizationsTenant = "organizations";
-        private const string CommonTenant = "common";
         public const string VssE2EID = "X-VSS-E2EID";
-        
+
+        private readonly Dictionary<Uri, HttpResponseHeaders> cache = new();
         private readonly ILogger logger;
 
         public AuthUtil(ILogger logger)
@@ -44,45 +50,15 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
             this.logger = logger;
         }
 
-        public async Task<Uri> GetAadAuthorityUriAsync(Uri uri, CancellationToken cancellationToken)
+        public async Task<AuthorizationInfo> GetAuthorizationInfoAsync(Uri uri, CancellationToken cancellationToken)
         {
-            var environmentAuthority = EnvUtil.GetAuthorityFromEnvironment(logger);
-            if (environmentAuthority != null)
-            {
-                return environmentAuthority;
-            }
-
             var headers = await GetResponseHeadersAsync(uri, cancellationToken);
-            var bearerHeaders = headers.WwwAuthenticate.Where(x => x.Scheme.Equals("Bearer", StringComparison.Ordinal));
-            
-            foreach (var param in bearerHeaders)
+
+            return new AuthorizationInfo
             {
-                if (param.Parameter == null)
-                {
-                    // MSA-backed accounts don't expose a parameter
-                    continue;
-                }
-
-                var equalSplit = param.Parameter.Split(new[] { "=" }, StringSplitOptions.RemoveEmptyEntries);
-                if (equalSplit.Length == 2)
-                {
-                    if (equalSplit[0].Equals("authorization_uri", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (Uri.TryCreate(equalSplit[1], UriKind.Absolute, out Uri parsedUri))
-                        {
-                            logger.Verbose(string.Format(Resources.FoundAADAuthorityFromHeaders, parsedUri));
-                            return parsedUri;
-                        }
-                    }
-                }
-            }
-
-            // Return the common tenant
-            var aadBase = UsePpeAadUrl(uri) ? "https://login.windows-ppe.net" : "https://login.microsoftonline.com";
-            logger.Verbose(string.Format(Resources.AADAuthorityNotFound, aadBase));
-
-            var tenant = EnvUtil.MsalEnabled() ? OrganizationsTenant: CommonTenant;
-            return new Uri($"{aadBase}/{tenant}");
+                EntraAuthorityUri = GetAuthority(uri, headers),
+                EntraTenantId = GetTenantId(headers),
+            };
         }
 
         public async Task<AzDevDeploymentType> GetAzDevDeploymentType(Uri uri)
@@ -132,21 +108,75 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
 
         protected virtual async Task<HttpResponseHeaders> GetResponseHeadersAsync(Uri uri, CancellationToken cancellationToken)
         {
-            using (var httpClient = new HttpClient())
+            if (cache.TryGetValue(uri, out HttpResponseHeaders headers))
+            {
+                return headers;
+            }
+
+            var httpClient = HttpClientFactory.Default.GetHttpClient();
+
             using (var request = new HttpRequestMessage(HttpMethod.Get, uri))
             {
-                foreach (var userAgent in Program.UserAgent)
-                {
-                    httpClient.DefaultRequestHeaders.UserAgent.Add(userAgent);
-                }
-
-
                 logger.Verbose($"GET {uri}");
-                using (var response = await httpClient.SendAsync(request, cancellationToken))
+                using (var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
                 {
+                    cache[uri] = response.Headers;
                     return response.Headers;
                 }
             }
+        }
+
+        private Uri GetAuthority(Uri uri, HttpResponseHeaders responseHeaders)
+        {
+            var environmentAuthority = EnvUtil.GetAuthorityFromEnvironment(logger);
+            if (environmentAuthority != null)
+            {
+                return environmentAuthority;
+            }
+
+            var bearerHeaders = responseHeaders.WwwAuthenticate.Where(x => x.Scheme.Equals("Bearer", StringComparison.Ordinal));
+
+            foreach (var param in bearerHeaders)
+            {
+                if (param.Parameter == null)
+                {
+                    // MSA-backed accounts don't expose a parameter
+                    continue;
+                }
+
+                var equalSplit = param.Parameter.Split(new[] { "=" }, StringSplitOptions.RemoveEmptyEntries);
+                if (equalSplit.Length == 2)
+                {
+                    if (equalSplit[0].Equals("authorization_uri", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (Uri.TryCreate(equalSplit[1], UriKind.Absolute, out Uri parsedUri))
+                        {
+                            logger.Verbose(string.Format(Resources.FoundAADAuthorityFromHeaders, parsedUri));
+                            return parsedUri;
+                        }
+                    }
+                }
+            }
+
+            // Return the common tenant
+            var aadBase = UsePpeAadUrl(uri) ? "https://login.windows-ppe.net" : "https://login.microsoftonline.com";
+            logger.Verbose(string.Format(Resources.AADAuthorityNotFound, aadBase));
+
+            // The Azure Artifacts application has MSA-Passthrough enabled which requires the use of the organizations
+            // tenant when requesting tokens for MSA users. This covers both organizations and consumers in cases where
+            // a tenant ID cannot be obtained from authenticate headers.
+            return new Uri($"{aadBase}/organizations");
+        }
+
+        private string GetTenantId(HttpResponseHeaders responseHeaders)
+        {
+            if (responseHeaders.Contains(VssResourceTenant))
+            {
+                responseHeaders.TryGetValues(VssResourceTenant, out var tenantId);
+                return tenantId.FirstOrDefault();
+            }
+
+            return null;
         }
 
         private bool UsePpeAadUrl(Uri uri)

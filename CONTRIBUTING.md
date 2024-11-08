@@ -11,7 +11,7 @@ In this and subsequent examples, configuration can be either `debug` or `release
 ### Publishing
 
 ```shell
-dotnet publish CredentialProvider.Microsoft --configuration Release --framework net6.0
+dotnet publish CredentialProvider.Microsoft --configuration Release --framework net8.0
 ```
 
 ### Packing
@@ -23,7 +23,7 @@ dotnet pack CredentialProvider.Microsoft --configuration Release
 For CI builds, you can append a pre-release version:
 
 ```shell
-dotnet pack CredentialProvider.Microsoft --configuration Release /p:NuspecProperties=VersionSuffix=-MyCustomVersion-2
+dotnet pack CredentialProvider.Microsoft --configuration Release /p:NuspecProperties=VersionSuffix=MyCustomVersion-2
 ```
 
 ### Versioning

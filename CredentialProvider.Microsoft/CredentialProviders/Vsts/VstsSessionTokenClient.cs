@@ -6,10 +6,11 @@ using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 using NuGetCredentialProvider.Logging;
+using NuGetCredentialProvider.Util;
 
 namespace NuGetCredentialProvider.CredentialProviders.Vsts
 {
@@ -17,7 +18,11 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
     {
         private const string TokenScope = "vso.packaging_write vso.drop_write";
 
-        private static readonly HttpClient httpClient = new HttpClient();
+        private static readonly JsonSerializerOptions options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
+        };
 
         private readonly Uri vstsUri;
         private readonly string bearerToken;
@@ -38,11 +43,6 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
 
-            foreach (var userAgent in Program.UserAgent)
-            {
-                request.Headers.UserAgent.Add(userAgent);
-            }
-
             var tokenRequest = new VstsSessionToken()
             {
                 DisplayName = "Azure DevOps Artifacts Credential Provider",
@@ -51,7 +51,7 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
             };
 
             request.Content = new StringContent(
-                JsonConvert.SerializeObject(tokenRequest),
+                JsonSerializer.Serialize(tokenRequest, options),
                 Encoding.UTF8,
                 "application/json");
 
@@ -73,13 +73,16 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
 
             uriBuilder.Path = uriBuilder.Path.TrimEnd('/') + "/_apis/Token/SessionTokens";
 
+            var httpClient = HttpClientFactory.Default.GetHttpClient();
+
             using (var request = CreateRequest(uriBuilder.Uri, validTo))
             using (var response = await httpClient.SendAsync(request, cancellationToken))
             {
+                logger.LogResponse(NuGet.Common.LogLevel.Verbose, true, response);
+
                 string serializedResponse;
                 if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
                 {
-                    
                     request.Dispose();
                     response.Dispose();
 
@@ -88,6 +91,8 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
                     using(var response2 = await httpClient.SendAsync(request2, cancellationToken))
                     {
                         response2.EnsureSuccessStatusCode();
+                        logger.LogResponse(NuGet.Common.LogLevel.Verbose, true, response2);
+
                         serializedResponse = await response2.Content.ReadAsStringAsync();
                     }
                 }
@@ -96,8 +101,8 @@ namespace NuGetCredentialProvider.CredentialProviders.Vsts
                     response.EnsureSuccessStatusCode();
                     serializedResponse = await response.Content.ReadAsStringAsync();
                 }
-                
-                var responseToken = JsonConvert.DeserializeObject<VstsSessionToken>(serializedResponse);
+
+                var responseToken = JsonSerializer.Deserialize<VstsSessionToken>(serializedResponse, options);
 
                 if (validTo.Subtract(responseToken.ValidTo.Value).TotalHours > 1.0)
                 {

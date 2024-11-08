@@ -10,10 +10,16 @@ steps:
     version: 3.1.x
 
 - task: UseDotNet@2
-  displayName: Use .NET 6 SDK
+  displayName: Use .NET 6 runtime
+  inputs:
+    packageType: runtime
+    version: 6.x
+
+- task: UseDotNet@2
+  displayName: Use .NET 8 SDK
   inputs:
     packageType: sdk
-    version: 6.x
+    version: 8.x
 
 - task: NuGetToolInstaller@1
   displayName: NuGet Install
@@ -22,30 +28,19 @@ steps:
   displayName: NuGet Authenticate
 
 - ${{ if eq(parameters.sign, 'true') }}:
-  - task: ms-vseng.MicroBuildTasks.30666190-6959-11e5-9f96-f56098202fef.MicroBuildSigningPlugin@4
-    displayName: Install Signing Plugin
-    inputs:
-      signType: '$(SignType)'
-      feedSource: 'https://pkgs.dev.azure.com/mseng/_packaging/MicroBuildToolset/nuget/v3/index.json'
-
-  - task: ms-vseng.MicroBuildTasks.32f78468-e895-4f47-962c-58a699361df8.MicroBuildSwixPlugin@4
-    displayName: Install Swix Plugin
-    inputs:
-      feedSource: 'https://pkgs.dev.azure.com/mseng/_packaging/MicroBuildToolset/nuget/v3/index.json'
-
   - script: nuget restore packages.config -PackagesDirectory packages
     displayName: NuGet restore
     workingDirectory: CredentialProvider.Microsoft.VSIX
 
 - script: dotnet restore
-  displayName: dotnet restore NuGet.config CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj
+  displayName: dotnet restore MicrosoftCredentialProvider.sln
 
 - task: MSBuild@1
   displayName: Build CredentialProvider
   inputs:
-    solution: 'CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj'
+    solution: 'MicrosoftCredentialProvider.sln'
     configuration: '$(BuildConfiguration)'
-    msbuildArguments: '/t:rebuild /p:TreatWarningsAsErrors=true'
+    msbuildArguments: '/t:rebuild /p:TreatWarningsAsErrors=true /p:${{ parameters.nuspecProperties }}'
 
 - ${{ if eq(parameters.sign, 'true') }}:
   - task: MSBuild@1
@@ -62,22 +57,14 @@ steps:
       configuration: '$(BuildConfiguration)'
       msbuildArguments: '/p:OutputPath=$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\vsix\ /p:TreatWarningsAsErrors=true'
 
-  - task: ms-vseng.MicroBuildTasks.4305a8de-ba66-4d8b-b2d1-0dc4ecbbf5e8.MicroBuildUploadVstsDropFolder@2
-    displayName: Upload VSTS Drop
-    inputs:
-      DropFolder: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\vsix\'
-      DropServiceUri: https://mseng.artifacts.visualstudio.com
-      DropRetentionDays: 365
-      AccessToken: $(System.AccessToken)
-
 - ${{ if ne(parameters.sign, 'true') }}:
-  - script: dotnet test CredentialProvider.Microsoft.Tests/CredentialProvider.Microsoft.Tests.csproj --logger trx --results-directory $(Agent.TempDirectory)
+  - script: dotnet test MicrosoftCredentialProvider.sln --logger trx --results-directory $(Agent.TempDirectory)
     displayName: dotnet test
 
-- script: dotnet publish CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj --no-build --framework net6.0 --configuration $(BuildConfiguration)
+# Create .NET 6.0 release for netcore users
+- script: dotnet publish CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj --no-build --framework net6.0 --configuration $(BuildConfiguration) -p:${{ parameters.nuspecProperties }}
   displayName: dotnet publish net6.0
 
-# Create .NET 6.0 release for netcore users
 - task: CopyFiles@2
   displayName: Copy net6.0 files into tarball
   inputs:
@@ -115,8 +102,49 @@ steps:
     archiveFile: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\Microsoft.Net6.NuGet.CredentialProvider.zip'
     replaceExistingArchive: true
 
+# Clean target folder and create .NET 8.0 release for netcore users
+- script: dotnet publish CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj --no-build --framework net8.0 --configuration $(BuildConfiguration) -p:${{ parameters.nuspecProperties }}
+  displayName: dotnet publish net8.0
+
+- task: CopyFiles@2
+  displayName: Copy net8.0 files into tarball
+  inputs:
+    sourceFolder: '$(Build.SourcesDirectory)\CredentialProvider.Microsoft\bin\$(BuildConfiguration)\net8.0\publish\'
+    contents: '**\*'
+    targetFolder: '$(Build.ArtifactStagingDirectory)\tarball\plugins\netcore\CredentialProvider.Microsoft\'
+    cleanTargetFolder: true
+
+- task: CopyFiles@2
+  displayName: Copy license files into tarball
+  inputs:
+    contents: |
+      LICENSE
+      CredentialProvider.Microsoft\EULA_Microsoft Visual Studio Team Services Credential Provider.docx
+      CredentialProvider.Microsoft\ThirdPartyNotices.txt
+    targetFolder: '$(Build.ArtifactStagingDirectory)\tarball\'
+    flattenFolders: true
+
+- task: ArchiveFiles@2
+  displayName: Create net8.0 tarball
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\tarball\'
+    includeRootFolder: false
+    archiveType: 'tar'
+    tarCompression: 'gz'
+    archiveFile: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\Microsoft.Net8.NuGet.CredentialProvider.tar.gz'
+    replaceExistingArchive: true
+
+- task: ArchiveFiles@2
+  displayName: Create net8.0 zip
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\tarball\'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\Microsoft.Net8.NuGet.CredentialProvider.zip'
+    replaceExistingArchive: true
+
 # Clean target folder and create netcore 3.1 and netfx releases
-- script: dotnet publish CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj --no-build --framework netcoreapp3.1 --configuration $(BuildConfiguration)
+- script: dotnet publish CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj --no-build --framework netcoreapp3.1 --configuration $(BuildConfiguration) -p:${{ parameters.nuspecProperties }}
   displayName: dotnet publish netcoreapp3.1
 
 - task: CopyFiles@2
@@ -185,6 +213,33 @@ steps:
     replaceExistingArchive: true
 
 - task: CopyFiles@2
+  displayName: Copy netfx 4.8.1 files into tarball
+  inputs:
+    sourceFolder: '$(Build.SourcesDirectory)\CredentialProvider.Microsoft\bin\$(BuildConfiguration)\net481\'
+    contents: '**\*'
+    targetFolder: '$(Build.ArtifactStagingDirectory)\tarball\plugins\netfx\CredentialProvider.Microsoft\'
+    cleanTargetFolder: true
+
+- task: ArchiveFiles@2
+  displayName: Create netfx 4.8.1 tarball
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\tarball\'
+    includeRootFolder: false
+    archiveType: 'tar'
+    tarCompression: 'gz'
+    archiveFile: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\Microsoft.NetFx48.NuGet.CredentialProvider.tar.gz'
+    replaceExistingArchive: true
+
+- task: ArchiveFiles@2
+  displayName: Create netfx 4.8.1 zip
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)\tarball\'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\Microsoft.NetFx48.NuGet.CredentialProvider.zip'
+    replaceExistingArchive: true
+
+- task: CopyFiles@2
   displayName: Collect symbols
   inputs:
     SourceFolder: '$(Build.SourcesDirectory)\CredentialProvider.Microsoft\bin\$(BuildConfiguration)'
@@ -192,46 +247,16 @@ steps:
       **\CredentialProvider.Microsoft.dll
       **\CredentialProvider.Microsoft.exe
       **\CredentialProvider.Microsoft.pdb
+      **\Microsoft.Artifacts.Authentication.dll
+      **\Microsoft.Artifacts.Authentication.pdb
     TargetFolder: '$(Build.ArtifactStagingDirectory)\symbols'
 
-- ${{ if eq(parameters.sign, 'true') }}:
-  - task: PublishSymbols@2
-    displayName: Publish symbols
-    inputs:
-      SymbolsFolder: '$(Build.ArtifactStagingDirectory)\symbols'
-      SearchPattern:  '**\*.pdb'
-      IndexSources: false
-      PublishSymbols: true
-      SymbolServerType: TeamServices
-      SymbolsProduct: 'artifacts-credprovider'
-    env:
-      ArtifactServices.Symbol.AccountName: 'microsoft'
-      ArtifactServices.Symbol.UseAAD: 'true'
-
-- task: PublishPipelineArtifact@1
-  displayName: 'Upload symbols'
-  inputs:
-    artifact: "Symbols"
-    targetPath: '$(Build.ArtifactStagingDirectory)\symbols'
-
-- powershell: 'Write-Output ("##vso[task.setvariable variable=SignType;]")' 
-  displayName: Clear SignType
-
-- script: dotnet pack CredentialProvider.Microsoft/CredentialProvider.Microsoft.csproj -c $(BuildConfiguration) -o $(Build.ArtifactStagingDirectory)\$(BuildConfiguration) -p:${{ parameters.nuspecProperties }}
+- script: dotnet pack MicrosoftCredentialProvider.sln --no-build -c $(BuildConfiguration) -o $(Build.ArtifactStagingDirectory)\$(BuildConfiguration) -p:${{ parameters.nuspecProperties }}
   displayName: dotnet pack
 
-- script: dotnet nuget push $(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\*.nupkg --source artifacts-credprovider --api-key unimportantValue
-  displayName: dotnet push
-  condition: eq(variables['PushNupkg'], 'true')
-
-- task: ManifestGeneratorTask@0
-  displayName: 'SBOM Generator'
-  inputs:
-    BuildDropPath: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\'
-    Verbosity: Verbose
-
-- task: PublishBuildArtifacts@1
-  displayName: Publish Artifact $(Build.BuildNumber)
-  inputs:
-    PathtoPublish: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\'
-    ArtifactName: '$(Build.BuildNumber)'
+- ${{ if eq(parameters.publish, 'true') }}:
+  - task: PublishPipelineArtifact@1
+    displayName: Publish Artifact $(Build.BuildNumber)
+    inputs:
+      artifact: '$(Build.BuildNumber)'
+      targetPath: '$(Build.ArtifactStagingDirectory)\$(BuildConfiguration)\'
